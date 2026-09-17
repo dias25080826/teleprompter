@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Prompter</title>
+<style>
+  :root{
+    --bg: #121316;
+    --panel: #1c1e22;
+    --panel-2: #24272c;
+    --line: #34373d;
+    --ink: #eee9df;
+    --ink-dim: #9a9c9f;
+    --amber: #e6a13d;
+    --amber-dim: #6b5227;
+    --rec: #d9483c;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%; width:100%;
+    background:var(--bg); color:var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow:hidden;
+  }
+  #stage{
+    position:fixed; inset:0;
+    display:flex; flex-direction:column;
+  }
+
+  /* ---------- camera layer ---------- */
+  #camWrap{
+    position:absolute; inset:0;
+    background:#000;
+    display:flex; align-items:center; justify-content:center;
+    overflow:hidden;
+  }
+  #cam{
+    width:100%; height:100%; object-fit:cover;
+    filter:brightness(0.98);
+  }
+  #cam.mirror{ transform:scaleX(-1); }
+  #camMsg{
+    position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    text-align:center; padding:32px;
+    color:var(--ink-dim); font-size:15px; line-height:1.6;
+  }
+  #camMsg button{
+    margin-top:14px;
+  }
+  #camErr{
+    margin-top:12px;
+    font-size:12px;
+    color:var(--rec);
+    max-width:340px;
+  }
+
+  /* ---------- teleprompter text overlay ---------- */
+  #promptViewport{
+    position:absolute;
+    left:6%; right:6%;
+    height:34%;
+    overflow:hidden;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 14%, black 86%, transparent 100%);
+            mask-image: linear-gradient(to bottom, transparent 0%, black 14%, black 86%, transparent 100%);
+    pointer-events:none;
+  }
+  #promptTrack{
+    position:relative;
+    will-change: transform;
+  }
+  #promptText{
+    font-family: Georgia, "Times New Roman", serif;
+    color: #ffffff;
+    text-align:center;
+    font-weight:600;
+    line-height:1.5;
+    text-shadow: 0 1px 3px rgba(0,0,0,.85), 0 0 18px rgba(0,0,0,.5);
+    padding: 6vh 0 60vh 0;
+    white-space:pre-wrap;
+  }
+  #centerLine{
+    position:absolute; left:0; right:0; top:50%;
+    height:1px;
+    pointer-events:none;
+  }
+
+  /* ---------- top tally / status bar ---------- */
+  #tally{
+    position:absolute; top:0; left:0; right:0;
+    display:flex; align-items:center; gap:10px;
+    padding:14px 18px;
+    background:linear-gradient(to bottom, rgba(0,0,0,.55), transparent);
+    z-index:5;
+    font-size:12px; letter-spacing:.02em; color:var(--ink-dim);
+    pointer-events:none;
+  }
+  #tally .dot{
+    width:8px; height:8px; border-radius:50%;
+    background:var(--ink-dim);
+    flex-shrink:0;
+  }
+  #tally.live .dot{ background:var(--rec); box-shadow:0 0 8px var(--rec); animation:pulse 1.4s infinite; }
+  #tally.live #tallyLabel{ color:#f0d3ce; }
+  @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:.35;} }
+
+  /* ---------- control console ---------- */
+  #console{
+    position:absolute; left:0; right:0; bottom:0;
+    background:var(--panel);
+    border-top:1px solid var(--line);
+    z-index:10;
+    transition: transform .28s ease;
+  }
+  #console.hidden{ transform: translateY(100%); }
+
+  #consoleHandle{
+    position:absolute; top:-34px; right:16px;
+    width:88px; height:34px;
+    background:var(--panel);
+    border:1px solid var(--line); border-bottom:none;
+    border-radius:8px 8px 0 0;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    color:var(--ink-dim);
+    font-size:11px; letter-spacing:.03em;
+    gap:6px;
+  }
+  #consoleHandle svg{ transition: transform .28s ease; }
+  #console.hidden #consoleHandle svg{ transform:rotate(180deg); }
+
+  #consoleInner{
+    padding: 16px 18px 18px;
+    max-height: 62vh;
+    overflow-y:auto;
+  }
+
+  .row{
+    display:flex; align-items:center; gap:14px;
+    margin-bottom:14px;
+  }
+  .row:last-child{ margin-bottom:0; }
+
+  button.primary{
+    background:var(--amber);
+    color:#20180a;
+    border:none;
+    font-weight:700;
+    font-size:14px;
+    padding:11px 20px;
+    border-radius:7px;
+    cursor:pointer;
+    letter-spacing:.01em;
+  }
+  button.primary:active{ transform:translateY(1px); }
+  button.ghost{
+    background:transparent;
+    border:1px solid var(--line);
+    color:var(--ink);
+    font-size:13px;
+    padding:10px 16px;
+    border-radius:7px;
+    cursor:pointer;
+  }
+  button.ghost.active{
+    border-color:var(--amber);
+    color:var(--amber);
+  }
+  button.icon{
+    background:var(--panel-2);
+    border:1px solid var(--line);
+    color:var(--ink);
+    width:40px; height:40px;
+    border-radius:7px;
+    cursor:pointer;
+    font-size:16px;
+    display:flex; align-items:center; justify-content:center;
+    flex-shrink:0;
+  }
+
+  .sliderGroup{
+    flex:1;
+    min-width:120px;
+    display:flex; flex-direction:column; gap:5px;
+  }
+  .sliderGroup .lbl{
+    display:flex; justify-content:space-between;
+    font-size:11px; color:var(--ink-dim); letter-spacing:.02em;
+  }
+  .sliderGroup .lbl span:last-child{ color:var(--ink); font-variant-numeric: tabular-nums; }
+  input[type=range]{
+    -webkit-appearance:none; appearance:none;
+    width:100%; height:4px;
+    background:var(--line);
+    border-radius:2px; outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;
+    width:16px; height:16px; border-radius:50%;
+    background:var(--amber);
+    cursor:pointer;
+    border:2px solid #16181b;
+  }
+  input[type=range]::-moz-range-thumb{
+    width:14px; height:14px; border-radius:50%;
+    background:var(--amber); border:2px solid #16181b; cursor:pointer;
+  }
+
+  textarea#scriptInput{
+    width:100%;
+    min-height:110px;
+    background:var(--panel-2);
+    border:1px solid var(--line);
+    border-radius:8px;
+    color:var(--ink);
+    font-size:14px;
+    line-height:1.55;
+    padding:12px 13px;
+    resize:vertical;
+    font-family:Georgia, serif;
+  }
+  textarea#scriptInput:focus{ outline:1px solid var(--amber); border-color:var(--amber); }
+
+  .divider{ height:1px; background:var(--line); margin:16px 0; }
+
+  .sectionLbl{
+    font-size:11px; text-transform:none; letter-spacing:.03em; color:var(--ink-dim);
+    margin-bottom:8px;
+  }
+
+  .wrapRow{ flex-wrap:wrap; }
+
+  #guideMark{
+    position:absolute;
+    left:6%; right:6%;
+    top: 50%;
+    height:2px;
+    background: rgba(230,161,61,.85);
+    box-shadow:0 0 6px rgba(230,161,61,.6);
+    transform: translateY(-50%);
+    pointer-events:none;
+    display:none;
+  }
+  #guideMark.on{ display:block; }
+
+  ::-webkit-scrollbar{ width:8px; }
+  ::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
+
+  @media (max-width:600px){
+    .row{ flex-wrap:wrap; }
+    #promptViewport{ left:4%; right:4%; height:30%; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    #console{ transition:none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+
+  <div id="camWrap">
+    <video id="cam" autoplay playsinline muted></video>
+    <div id="camMsg">
+      <div>
+        <div style="font-size:14px; margin-bottom:2px;">A câmera precisa da sua permissão.</div>
+        <div style="font-size:12.5px;">Isso permite ver a própria imagem por trás do texto.</div>
+        <button class="primary" id="camRetry" style="margin-top:16px;">Ativar câmera</button>
+        <div id="camErr"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tally">
+    <div class="dot"></div>
+    <span id="tallyLabel">PARADO</span>
+  </div>
+
+  <div id="guideMark"></div>
+
+  <div id="promptViewport">
+    <div id="promptTrack">
+      <div id="promptText"></div>
+    </div>
+  </div>
+
+  <div id="console">
+    <div id="consoleHandle">
+      <span>painel</span>
+      <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1L5 5L9 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </div>
+    <div id="consoleInner">
+
+      <div class="sectionLbl">roteiro</div>
+      <textarea id="scriptInput" placeholder="Cole ou digite aqui o texto que você vai ler...">Bem-vindo a mais um webinário da Escola Judicial. Hoje vamos falar sobre um tema muito importante para a nossa comunidade jurídica.</textarea>
+
+      <div class="divider"></div>
+
+      <div class="row wrapRow">
+        <button class="primary" id="playBtn">▶ Iniciar leitura</button>
+        <button class="ghost" id="resetBtn">Reiniciar</button>
+        <button class="ghost" id="mirrorBtn">Espelhar câmera</button>
+        <button class="ghost" id="guideBtn">Linha guia</button>
+        <button class="icon" id="fullscreenBtn" title="Tela cheia">⛶</button>
+      </div>
+
+      <div class="row wrapRow">
+        <div class="sliderGroup">
+          <div class="lbl"><span>Velocidade</span><span id="speedVal">4</span></div>
+          <input type="range" id="speedSlider" min="1" max="10" step="1" value="4">
+        </div>
+        <div class="sliderGroup">
+          <div class="lbl"><span>Tamanho do texto</span><span id="sizeVal">30</span></div>
+          <input type="range" id="sizeSlider" min="16" max="60" step="1" value="30">
+        </div>
+        <div class="sliderGroup">
+          <div class="lbl"><span>Opacidade do texto</span><span id="opacityVal">100</span></div>
+          <input type="range" id="opacitySlider" min="20" max="100" step="5" value="100">
+        </div>
+        <div class="sliderGroup">
+          <div class="lbl"><span>Posição vertical</span><span id="posVal">meio</span></div>
+          <input type="range" id="posSlider" min="0" max="100" step="1" value="30">
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  const video = document.getElementById('cam');
+  const camMsg = document.getElementById('camMsg');
+  const camRetry = document.getElementById('camRetry');
+  const camErr = document.getElementById('camErr');
+
+  function explainError(e){
+    if(!window.isSecureContext){
+      return 'Esta página não está sendo servida em https:// (ou localhost), e por isso o navegador bloqueia a câmera nesse contexto.';
+    }
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      return 'Este navegador/ambiente não expõe acesso à câmera para esta página (comum dentro de janelas incorporadas/iframes). Abra o link do prompter direto em uma aba do navegador.';
+    }
+    const name = e && e.name ? e.name : '';
+    if(name === 'NotAllowedError' || name === 'PermissionDeniedError'){
+      return 'A permissão foi negada. Clique no ícone de cadeado/câmera na barra de endereço do navegador, permita a câmera para este site e recarregue a página.';
+    }
+    if(name === 'NotFoundError' || name === 'DevicesNotFoundError'){
+      return 'Nenhuma câmera foi encontrada neste dispositivo.';
+    }
+    if(name === 'NotReadableError'){
+      return 'A câmera está sendo usada por outro aplicativo. Feche outros programas que possam estar usando a câmera e tente de novo.';
+    }
+    if(name === 'SecurityError'){
+      return 'O ambiente onde esta página está aberta bloqueia o acesso à câmera por política de segurança. Abra o link do prompter direto em uma aba do navegador (fora do chat).';
+    }
+    return 'Não foi possível acessar a câmera (' + (name || 'erro desconhecido') + '). Tente abrir o link do prompter direto em uma aba do navegador.';
+  }
+
+  async function startCamera(){
+    camErr.textContent = '';
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      camMsg.style.display = 'flex';
+      camErr.textContent = explainError();
+      return;
+    }
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      video.srcObject = stream;
+      camMsg.style.display = 'none';
+    }catch(e){
+      camMsg.style.display = 'flex';
+      camErr.textContent = explainError(e);
+    }
+  }
+  camRetry.addEventListener('click', startCamera);
+  startCamera();
+
+  // ---- Mirror ----
+  const mirrorBtn = document.getElementById('mirrorBtn');
+  let mirrored = false;
+  function applyMirror(){
+    video.classList.toggle('mirror', mirrored);
+    mirrorBtn.classList.toggle('active', mirrored);
+  }
+  mirrorBtn.addEventListener('click', ()=>{ mirrored = !mirrored; applyMirror(); });
+  applyMirror();
+
+  // ---- Guide line ----
+  const guideBtn = document.getElementById('guideBtn');
+  const guideMark = document.getElementById('guideMark');
+  guideBtn.addEventListener('click', ()=>{
+    guideMark.classList.toggle('on');
+    guideBtn.classList.toggle('active');
+  });
+
+  // ---- Script / prompt track ----
+  const scriptInput = document.getElementById('scriptInput');
+  const promptText = document.getElementById('promptText');
+  const promptTrack = document.getElementById('promptTrack');
+  const promptViewport = document.getElementById('promptViewport');
+
+  function syncText(){
+    promptText.textContent = scriptInput.value;
+  }
+  syncText();
+  scriptInput.addEventListener('input', ()=>{
+    syncText();
+    resetScroll();
+  });
+
+  // font size
+  const sizeSlider = document.getElementById('sizeSlider');
+  const sizeVal = document.getElementById('sizeVal');
+  function applySize(){
+    promptText.style.fontSize = sizeSlider.value + 'px';
+    sizeVal.textContent = sizeSlider.value;
+  }
+  sizeSlider.addEventListener('input', applySize);
+  applySize();
+
+  // opacity
+  const opacitySlider = document.getElementById('opacitySlider');
+  const opacityVal = document.getElementById('opacityVal');
+  function applyOpacity(){
+    promptText.style.opacity = (opacitySlider.value/100);
+    opacityVal.textContent = opacitySlider.value;
+  }
+  opacitySlider.addEventListener('input', applyOpacity);
+  applyOpacity();
+
+  // vertical position
+  const posSlider = document.getElementById('posSlider');
+  const posVal = document.getElementById('posVal');
+  function applyPos(){
+    const pct = Number(posSlider.value); // 0 = top, 100 = bottom
+    const viewH = window.innerHeight;
+    const boxH = viewH * 0.34;
+    const maxTop = viewH - boxH;
+    const top = (pct/100) * maxTop;
+    promptViewport.style.top = top + 'px';
+    posVal.textContent = pct < 25 ? 'topo' : (pct > 70 ? 'baixo' : 'meio');
+  }
+  posSlider.addEventListener('input', applyPos);
+  window.addEventListener('resize', applyPos);
+  applyPos();
+
+  // ---- Scrolling engine ----
+  const speedSlider = document.getElementById('speedSlider');
+  const speedVal = document.getElementById('speedVal');
+  speedSlider.addEventListener('input', ()=> speedVal.textContent = speedSlider.value);
+
+  const playBtn = document.getElementById('playBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const tally = document.getElementById('tally');
+  const tallyLabel = document.getElementById('tallyLabel');
+
+  let playing = false;
+  let offset = 0;
+  let rafId = null;
+  let lastTs = null;
+
+  function resetScroll(){
+    offset = 0;
+    promptTrack.style.transform = 'translateY(0px)';
+  }
+
+  function tick(ts){
+    if(!lastTs) lastTs = ts;
+    const dt = (ts - lastTs) / 1000;
+    lastTs = ts;
+    const speed = Number(speedSlider.value); // px/sec base unit, scaled
+    offset += speed * 14 * dt;
+    promptTrack.style.transform = `translateY(-${offset}px)`;
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function setPlaying(state){
+    playing = state;
+    if(playing){
+      playBtn.textContent = '⏸ Pausar';
+      tally.classList.add('live');
+      tallyLabel.textContent = 'LENDO';
+      lastTs = null;
+      rafId = requestAnimationFrame(tick);
+    } else {
+      playBtn.textContent = '▶ Iniciar leitura';
+      tally.classList.remove('live');
+      tallyLabel.textContent = 'PARADO';
+      if(rafId) cancelAnimationFrame(rafId);
+    }
+  }
+
+  playBtn.addEventListener('click', ()=> setPlaying(!playing));
+  resetBtn.addEventListener('click', ()=>{
+    setPlaying(false);
+    resetScroll();
+  });
+
+  // spacebar toggles play/pause when not typing in textarea
+  document.addEventListener('keydown', (e)=>{
+    if(e.code === 'Space' && document.activeElement !== scriptInput){
+      e.preventDefault();
+      setPlaying(!playing);
+    }
+  });
+
+  // ---- Console collapse ----
+  const consolePanel = document.getElementById('console');
+  const consoleHandle = document.getElementById('consoleHandle');
+  consoleHandle.addEventListener('click', ()=>{
+    consolePanel.classList.toggle('hidden');
+  });
+
+  // ---- Fullscreen ----
+  const fsBtn = document.getElementById('fullscreenBtn');
+  fsBtn.addEventListener('click', ()=>{
+    if(!document.fullscreenElement){
+      document.documentElement.requestFullscreen().catch(()=>{});
+    } else {
+      document.exitFullscreen().catch(()=>{});
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
